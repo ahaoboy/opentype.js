@@ -6,6 +6,8 @@
 <link rel="stylesheet" href="site.css">
 <script src="site.js"></script>
 
+<!-- This style tag used for dynamically loading uploaded fonts. -->
+<style id="OpentypeCustomFontTag"></style>
 <div class="header">
     <div class="container">
         <h1><a href="./">opentype.js</a></h1>
@@ -39,7 +41,9 @@
             <div id="palettes"></div>
             <hr>
         </div>
-        Glyphs <span id="pagination"></span>
+        Glyphs
+        <div id="searchForm"></div>
+        <span id="pagination"></span>
         <br>
         <div id="glyph-list-end"></div>
     </div>
@@ -141,11 +145,16 @@ function displayGlyphData(glyphIndex) {
         container.innerHTML = '';
         return;
     }
-    var glyph = font.glyphs.get(glyphIndex),
+    var glyph = window.includeGlyphs[glyphIndex],
         html = '<dl>';
-    html += '<dt>name</dt><dd>'+glyph.name+'</dd>';
-
+    html += '<dt>glyphName</dt><dd>'+glyph.name+'</dd>';
     if (glyph.unicodes.length > 0) {
+        const char = String.fromCodePoint.apply(null, glyph.unicodes);
+        html += '<dt>glyph</dt><dd style="font-family:\'OpentypeCustomFont\'">'+char+'</dd>';
+        const hex = char.codePointAt(0).toString(16).padStart(4, '0');
+        html += '<dt>jsCode</dt><dd>\\u{'+hex+'}</dd>';
+        html += '<dt>htmlCode</dt><dd>&amp;#x'+hex+';</dd>';
+        html += '<dt>cssCode</dt><dd>content: \'\\'+hex+'\';</dd>';
         html += '<dt>unicode</dt><dd>'+ glyph.unicodes.map(formatUnicode).join(', ') +'</dd>';
     }
     html += '<dt>index</dt><dd>'+glyph.index+'</dd>';
@@ -161,7 +170,7 @@ function displayGlyphData(glyphIndex) {
         html += '<dt>leftSideBearing</dt><dd>'+glyph.leftSideBearing+'</dd>';
     }
     html += '</dl>';
-    if (glyph.numberOfContours > 0) {
+    if (glyph.numberOfContours > 0 && window.font.variation) {
         var contours = glyph.getContours(window.font.variation.getTransform(glyph, window.fontOptions.variation).points);
         html += 'contours:<div id="glyph-contours">' + contours.map(contourToString).join('\n') + '</div>';
     } else if (glyph.isComposite) {
@@ -288,13 +297,13 @@ function displayGlyph(glyphIndex) {
     canvas.dataset.glyphIndex = glyphIndex;
     ctx.clearRect(0, 0, width, height);
     if(glyphIndex < 0) return;
-    var glyph = window.font.glyphs.get(glyphIndex),
+    var glyph = window.includeGlyphs[glyphIndex],
         glyphWidth = glyph.advanceWidth * glyphScale,
         xmin = (width - glyphWidth)/2,
         xmax = (width + glyphWidth)/2,
         x0 = xmin,
         markSize = 10;
-
+    if(glyphIndex >= window.includeGlyphs.length) return;
     ctx.fillStyle = '#606060';
     ctx.fillRect(xmin-markSize+1, glyphBaseline, markSize, 1);
     ctx.fillRect(xmin, glyphBaseline, 1, markSize);
@@ -317,12 +326,12 @@ function renderGlyphItem(canvas, glyphIndex, prefix = '', paletteIndex) {
     var cellMarkSize = 4;
     var ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, cellWidth, cellHeight);
-    if (glyphIndex >= window.font.numGlyphs) return;
+    if (glyphIndex >= window.includeGlyphs.length) return;
 
     ctx.fillStyle = '#606060';
     ctx.font = '9px sans-serif';
     ctx.fillText(prefix + glyphIndex, 1, cellHeight-1);
-    var glyph = window.font.glyphs.get(glyphIndex),
+    var glyph = window.includeGlyphs[glyphIndex],
         glyphWidth = (glyph.advanceWidth || 0) * fontScale,
         xmin = (cellWidth - glyphWidth)/2,
         xmax = (cellWidth + glyphWidth)/2,
@@ -338,7 +347,7 @@ function renderGlyphItem(canvas, glyphIndex, prefix = '', paletteIndex) {
         options,
         { fill: typeof paletteIndex !== 'undefined' ? window.font.palettes.getColor(paletteIndex, window.fontOptions.usePalette) : '#000000' }
     );
-    
+
     if (/(^#ffffff)|(00$)/.test(overwriteOptions.fill)) {
         overwriteOptions.fill = '#000000';
     }
@@ -348,7 +357,8 @@ function renderGlyphItem(canvas, glyphIndex, prefix = '', paletteIndex) {
 
 function displayGlyphPage(pageNum) {
     pageSelected = pageNum;
-    document.getElementById('p'+pageNum).className = 'page-selected';
+    const page = document.getElementById('p'+pageNum)
+    if(page) page.className = 'page-selected';
     var firstGlyph = pageNum * cellCount;
     for(var i = 0; i < cellCount; i++) {
         renderGlyphItem(document.getElementById('g'+i), firstGlyph+i);
@@ -399,7 +409,7 @@ window.redraw = function(options = { withColors: true, withVariations: true }) {
         updateVariationOptions();
     }
     const selectedPage = document.querySelector('.page-selected');
-    const pageIndex = Array.from(selectedPage.parentElement.children).indexOf(selectedPage);    
+    const pageIndex = Array.from(selectedPage.parentElement.children).indexOf(selectedPage);
     displayGlyphPage(pageIndex);
     const glyphIndex = document.querySelector('[data-glyph-index]')?.dataset.glyphIndex;
     if(glyphIndex) {
@@ -468,6 +478,8 @@ function onFontLoaded(font) {
         window.font.onGlyphUpdated = null
     }
     window.font = font;
+    if(!window.includeGlyphs)
+      window.includeGlyphs = [...font.glyphs]
     options = Object.assign({}, window.font.defaultRenderOptions);
     window.fontOptions = options;
 
@@ -482,13 +494,41 @@ function onFontLoaded(font) {
     fontSize = fontScale * font.unitsPerEm;
     fontBaseline = cellMarginTop + h * head.yMax / maxHeight;
 
+    const searchForm = document.getElementById("searchForm")
+    if(!searchForm.childElementCount){
+      searchForm.innerHTML = ""
+      const searchInput = document.createElement("input")
+      const searchButton = document.createElement("button")
+      searchButton.innerText = "search"
+      searchInput.setAttribute("placeholder","please input glyph name")
+      searchForm.appendChild(searchInput)
+      searchForm.appendChild(searchButton)
+
+      searchButton.addEventListener("click",(e)=>{
+        e.preventDefault();
+        const v = searchInput.value.trim()
+        let includeGlyphs =  [...window.font.glyphs].filter(i =>
+          !v.length
+          || i.name?.toLowerCase().includes(v.toLowerCase())
+        )
+
+        if(v.length === 1){
+          includeGlyphs = [...[...window.font.glyphs].filter(i => v.length === 1 && String.fromCodePoint.apply(null, i.unicodes) === v), ...includeGlyphs]
+        }
+        window.includeGlyphs = includeGlyphs
+        onFontLoaded(window.font)
+      })
+    }
+
     var pagination = document.getElementById("pagination");
     pagination.innerHTML = '';
     var fragment = document.createDocumentFragment();
-    var numPages = Math.ceil(font.numGlyphs / cellCount);
+
+    const numGlyphs = window.includeGlyphs.length
+    var numPages = Math.ceil(numGlyphs / cellCount);
     for(var i = 0; i < numPages; i++) {
         var link = document.createElement('span');
-        var lastIndex = Math.min(font.numGlyphs-1, (i+1)*cellCount-1);
+        var lastIndex = Math.min(numGlyphs-1, (i+1)*cellCount-1);
         link.textContent = i*cellCount + '-' + lastIndex;
         link.id = 'p' + i;
         link.addEventListener('click', pageSelect, false);
@@ -517,7 +557,7 @@ function cellSelect(event) {
     var firstGlyphIndex = pageSelected*cellCount,
         cellIndex = +event.target.id.substr(1),
         glyphIndex = firstGlyphIndex + cellIndex;
-    if (glyphIndex < window.font.numGlyphs) {
+    if (glyphIndex < window.includeGlyphs.length) {
         displayGlyph(glyphIndex);
         displayGlyphData(glyphIndex);
     }
@@ -551,6 +591,8 @@ async function display(file, name) {
     }
     try {
         const data = await file.arrayBuffer();
+        const font = opentype.parse(isWoff2 ? Module.decompress(data) : data)
+        window.includeGlyphs = [...font.glyphs]
         let error;
         try {
             const base64String = arrayBufferToBase64(data);
@@ -558,10 +600,19 @@ async function display(file, name) {
         } catch (err) {
             showErrorMessage('Error loading font from localStorage');
             error = err;
-        }     
+        }
 
-        onFontLoaded(opentype.parse(isWoff2 ? Module.decompress(data) : data, { lowMemory: true }));
+        onFontLoaded(font);
         if ( !error ) showErrorMessage('');
+        const styleTag = document.getElementById("OpentypeCustomFontTag");
+        const blob = new Blob([data], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        styleTag.innerHTML = `
+          @font-face {
+            font-family: 'OpentypeCustomFont';
+            src: url(${url});
+          }
+        `.trim();
     } catch (err) {
         showErrorMessage(err.toString());
         throw err;
